@@ -1,0 +1,66 @@
+name: Build unsigned IPA
+
+# 云端 macOS 编译 → 打包 unsigned IPA → 发布到 Releases
+# 下载（国内）: https://gh-proxy.com/https://github.com/<你的用户名>/jev-chat-jarvis-ios/releases/download/unsigned-N/JeVJarvis-unsigned.ipa
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare Xcode project
+        run: |
+          brew install xcodegen || true
+          if command -v xcodegen >/dev/null 2>&1; then
+            xcodegen generate
+          else
+            echo "xcodegen not available -> using committed project"
+          fi
+
+      - name: Build (unsigned, arm64)
+        run: |
+          xcodebuild \
+            -project JevJarvis.xcodeproj \
+            -scheme JevJarvis \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build" \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+          echo "--- products ---"
+          ls -la build/Build/Products/Release-iphoneos/
+
+      - name: Package unsigned IPA
+        run: |
+          APP="build/Build/Products/Release-iphoneos/JevJarvis.app"
+          mkdir -p out/Payload
+          cp -R "$APP" out/Payload/
+          cd out && zip -qry JeVJarvis-unsigned.ipa Payload
+          echo "--- ipa ---" && ls -la
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: JeVJarvis-unsigned-ipa
+          path: out/JeVJarvis-unsigned.ipa
+          retention-days: 30
+
+      - name: Publish release (China download via gh-proxy)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "unsigned-${{ github.run_number }}" \
+            "out/JeVJarvis-unsigned.ipa" \
+            --title "Unsigned IPA (build ${{ github.run_number }})" \
+            --notes "Auto-built unsigned build of jev-chat-jarvis-ios. Sideload with your own Apple ID (Sideloadly/AltStore)."
